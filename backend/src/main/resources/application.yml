@@ -1,0 +1,44 @@
+spring:
+  application:
+    name: threatstream
+
+  datasource:
+    url: jdbc:h2:mem:threatstream
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
+
+  jpa:
+    hibernate:
+      ddl-auto: create
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: true
+
+  kafka:
+    bootstrap-servers: ${spring.embedded.kafka.brokers:localhost:9092}
+    consumer:
+      group-id: threatstream-group
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+
+  sql:
+    init:
+      mode: never
+
+jwt:
+  secret: threatstream-secret-key-for-jwt-signing-that-should-be-long-enough
+  expiration: 0
+
+server:
+  port: 8080
