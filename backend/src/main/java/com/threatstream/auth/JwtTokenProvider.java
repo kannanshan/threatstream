@@ -27,12 +27,10 @@ public class JwtTokenProvider {
     public String generateToken(Authentication authentication) {
         UserDetails userDetails = (UserDetails) authentication.getPrincipal();
         Date now = new Date();
-        Date expiryDate = new Date(now.getTime() + expiration);
 
         return Jwts.builder()
                 .subject(userDetails.getUsername())
                 .issuedAt(now)
-                .expiration(expiryDate)
                 .signWith(key)
                 .compact();
     }
