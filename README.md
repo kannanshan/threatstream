@@ -69,16 +69,62 @@ All endpoints below must be implemented, paginated where applicable, and role-ga
 **Dashboard**
 - `GET /api/dashboard/metrics` — latest system metrics + aggregated event counts (by severity, by type, last hour, hourly breakdown for the last 24h, active alerts count)
 
+**Subscriptions** (see section 6 for full requirements)
+- `GET /api/subscriptions` — list the calling user's subscription rules
+- `POST /api/subscriptions` — create a rule for the calling user
+- `PUT /api/subscriptions/{id}` — update a rule (owner or ADMIN)
+- `DELETE /api/subscriptions/{id}` — delete a rule (owner or ADMIN)
+- `GET /api/subscriptions/users/{username}` — list another user's rules (ADMIN only)
+
 ### 4. Live streaming to the frontend
-- A WebSocket endpoint at `/ws` (STOMP over SockJS) must broadcast incoming Kafka messages to subscribed clients.
-- Topics: `/topic/events`, `/topic/alerts`, `/topic/metrics`.
-- Authentication on the WebSocket connection is required — anonymous clients must not receive data.
+- A WebSocket endpoint at `/ws` (STOMP over SockJS) must stream incoming Kafka messages to connected clients.
+- **Per-user delivery, not global topics.** Each user only receives messages matching their own subscription rules (see section 6). Use STOMP user destinations: `/user/queue/events`, `/user/queue/alerts`, `/user/queue/metrics`. Spring's `SimpMessagingTemplate.convertAndSendToUser(username, ...)` is the right primitive.
+- Authentication on the WebSocket connection is required — the JWT must be validated at STOMP `CONNECT` (HTTP-level filtering does not run for WebSocket frames). Anonymous or unauthenticated clients must not receive data.
 
 ### 5. Quality bar
 - Reasonable separation of concerns (controllers thin, services for business logic).
 - Input validation on request bodies.
 - Sensible error handling — clients should get the right HTTP status (400 / 401 / 403 / 404 / 500), not a generic 500 for everything.
-- A handful of meaningful tests (auth flow, one Kafka consumer, one REST endpoint with role checks). `spring-kafka-test` and `spring-security-test` are already on the classpath.
+- A handful of meaningful tests (auth flow, one Kafka consumer, one REST endpoint with role checks, the subscription matching predicate). `spring-kafka-test` and `spring-security-test` are already on the classpath.
+
+### 6. Per-user event subscriptions (server-enforced filtering)
+
+This is the differentiator from a vanilla broadcast pipeline. The server must only deliver messages a user has explicitly asked for. Filtering is the server's job — never trust the client to drop messages it didn't want.
+
+**The model**
+- A user has zero or more *subscription rules*.
+- A rule says: "for this stream (`EVENTS` / `ALERTS` / `METRICS`), include messages matching these filters."
+- Filter dimensions on a rule:
+  - `severities` — set of `Severity` values (empty set = match any severity)
+  - `eventTypes` — set of `EventType` values (empty = match any) — relevant for `EVENTS`
+  - `geoCountries` — set of ISO-2 country codes (empty = match any) — relevant for `EVENTS`
+  - `includeNullGeo` — boolean — relevant for `EVENTS` only when `geoCountries` is non-empty (see edge cases)
+  - `alertActions` — set of `AlertAction` values (empty = match any) — relevant for `ALERTS`
+  - `enabled` — boolean — disabled rules never match
+
+**Match semantics**
+- A rule matches an event iff **every configured filter on the rule** matches the event (AND across dimensions).
+- A user receives an event iff **at least one of their enabled rules** matches it (OR across rules).
+- A user with **zero rules receives nothing** — this is the entire point of the feature, not a bug. Document it in the UI.
+
+**Edge cases to get right**
+- ~10% of `threat-events` arrive with `geoCountry == null` (legitimate — internal IPs). When a rule constrains `geoCountries`, a null-geo event matches iff the rule's `includeNullGeo == true`. When `geoCountries` is empty (unconstrained), null-geo events match unconditionally.
+- A user with multiple active WebSocket sessions (e.g. two browser tabs) should receive each matching message on **every** session. `convertAndSendToUser` handles this for free.
+- When a user mutates one of their rules via REST, the next event broadcast must reflect the new rule — design your in-memory cache invalidation accordingly.
+- An ADMIN editing another user's rules must invalidate the **owning user's** cache, not the admin's.
+- Authorization: a user can only modify their own rules. ADMIN may modify anyone's. Anyone else's attempt → `403`. Validation failures → `400`. Missing JWT on WebSocket CONNECT → reject the session.
+
+**Seed data**
+- Seed at least one sample rule per demo user in `DataLoader` so the feature is demoable on first boot. Suggested:
+  - `viewer` — events stream, severity `CRITICAL` only
+  - `analyst` — events with severity `HIGH`/`CRITICAL` and types `BRUTE_FORCE`/`DATA_EXFIL`/`INTRUSION_ATTEMPT`; plus alerts with action `BLOCK_IP`/`ESCALATE`
+  - `admin` — three catch-all rules (one per stream, no filters), so admin sees everything
+
+**What "good" looks like**
+- Filtering happens at publish time on the server, not in the browser.
+- The Kafka consumer has one line at the end of each listener: hand the persisted entity to a broadcaster service that asks "which connected users want this?" and unicasts only to them.
+- The broadcaster does not query the database on every event — there is an in-memory subscription cache, invalidated on rule mutation.
+- Predicate logic (does this rule match this event?) is unit-tested without a Spring context.
 
 ---
 
@@ -105,7 +151,8 @@ Read the existing code carefully before you write anything new. Some of it is co
 - Kafka **producer / simulator** for the three topics — does not exist
 - Kafka **consumers** for the three real topics — only the sample consumer exists
 - Persistence and aggregation paths from consumer → DB → dashboard
-- WebSocket message broadcasting and connection-level auth
+- WebSocket message broadcasting and connection-level auth (STOMP CONNECT JWT validation, per-user destinations)
+- **Per-user event subscriptions** — entity, REST CRUD, in-memory match registry, and broadcaster that filters per user (see section 6)
 - Notes on events (no entity yet — design it)
 - Tests
 
@@ -146,13 +193,14 @@ Runs on `http://localhost:3000` and proxies API calls to `:8080`.
 
 ## Time expectation
 
-We expect this to take a focused engineer **roughly 4–6 hours**. If you find yourself going significantly longer, stop and submit what you have along with a short note on what you would do next — we'd rather see clean partial work than rushed complete work.
+We expect this to take a focused engineer **roughly 6–8 hours**. If you find yourself going significantly longer, stop and submit what you have along with a short note on what you would do next — we'd rather see clean partial work than rushed complete work.
 
 You do **not** need to finish every endpoint to submit. Prioritise:
 
 1. Auth working correctly (including role enforcement)
 2. Kafka producer + at least one consumer end-to-end
 3. At least one REST list endpoint with filtering and pagination
-4. WebSocket pushing live events to the frontend
+4. **Subscription model + REST CRUD + per-user WebSocket delivery** (section 6) — this is what makes the system more than a broadcast pipe
+5. WebSocket pushing live events to the frontend, gated by subscriptions
 
 Then breadth (the rest of the endpoints), then tests, then polish.
