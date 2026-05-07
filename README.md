@@ -193,7 +193,7 @@ Runs on `http://localhost:3000` and proxies API calls to `:8080`.
 
 ## Time expectation
 
-We expect this to take a focused engineer **roughly 6–8 hours**. If you find yourself going significantly longer, stop and submit what you have along with a short note on what you would do next — we'd rather see clean partial work than rushed complete work.
+We expect this to take a focused engineer **roughly 1 hour**. If you find yourself going significantly longer, stop and submit what you have along with a short note on what you would do next — we'd rather see clean partial work than rushed complete work.
 
 You do **not** need to finish every endpoint to submit. Prioritise:
 
